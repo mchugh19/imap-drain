@@ -94,8 +94,7 @@ Build:
 cd src && go vet ./... && go test ./... && go build -o imap-drain .
 ```
 
-`INSTALL.sh` installs the binary to `/usr/local/bin`, the sources to
-`/usr/local/src/imap-drain`, and template systemd units
+`INSTALL.sh` installs the binary to `/usr/local/bin` and template systemd units
 (`imap-drain@.service` / `imap-drain@.timer`) that read
 `/etc/imap-drain/<name>.conf` and run every 2 minutes. One timer per
 mailbox pair.
