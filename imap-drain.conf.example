@@ -1,0 +1,35 @@
+# imap-drain example config
+# Copy to /etc/imap-drain/<name>.conf (one file per source server) and
+# enable the matching timer:  systemctl enable --now imap-drain@<name>.timer
+#
+# Lines are "key = value". Unknown keys are rejected.
+
+# --- source: the mailbox being drained ---
+source_host     = imap.mail.yahoo.com
+source_port     = 993
+source_user     = mchugh19@yahoo.com
+source_passfile = /etc/mbsync/yahoo.pass
+# Use the spelling the server advertises in LIST (Yahoo says "Inbox",
+# most servers accept "INBOX").
+source_mailbox  = Inbox
+
+# --- target: where drained mail is archived ---
+target_host     = imap.purelymail.com
+target_port     = 993
+target_user     = mmchugh@silverapple.eu
+target_passfile = /etc/mbsync/purelymail.pass
+target_mailbox  = INBOX
+
+# --- optional ---
+# state_dir    = /var/lib/imap-drain
+# dial_timeout  = 20s
+# total_timeout = 90s
+
+# --- OAuth2 instead of password LOGIN (e.g. Gmail as source) ---
+# Replace source_passfile with:
+# source_auth                  = oauthbearer
+# source_oauth_client_id       = xxxxx.apps.googleusercontent.com
+# source_oauth_client_secret_file = /etc/imap-drain/gmail-client-secret
+# source_oauth_refresh_token_file = /etc/imap-drain/gmail-refresh-token
+# source_oauth_token_url       = https://oauth2.googleapis.com/token
+# Mint the refresh token once with the oauth-setup helper (see README).

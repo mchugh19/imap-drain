@@ -1,0 +1,8 @@
+[Unit]
+Description=Drain IMAP source mailbox %i to target (generic)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/imap-drain -config /etc/imap-drain/%i.conf
