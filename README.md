@@ -12,15 +12,15 @@ it on a timer.
 Each run:
 
 1. Lists the messages in the source mailbox.
-2. For each message, searches the target for its Message-ID. Already there?
-   Skips it — counted as a duplicate, not a failure.
+2. For each message, searches the target for its Message-ID and skips it if
+   it's already there. That counts as a duplicate, not a failure.
 3. Copies the message to the target with its original arrival date
    (INTERNALDATE) and its flags, including `\Seen`.
 4. Only after the copy is confirmed, flags the source message `\Deleted`.
 5. Expunges deleted messages from the source.
 
 Messages already flagged `\Deleted` on the source are expunged without being
-copied — the flag means an earlier run already delivered them.
+copied. The flag means an earlier run already delivered them.
 
 There is no local database and no watermark. Every run is independent: if
 one fails halfway, the next run picks up where it left off. Failed messages
@@ -52,7 +52,7 @@ total_timeout = 90s
 
 There are no built-in credentials: the drain refuses to run unless every
 required field is set. `source_mailbox` must match the exact spelling the
-server advertises — Yahoo calls it `Inbox`, not `INBOX`.
+server advertises. Yahoo calls it `Inbox`, not `INBOX`.
 
 `source_auth` / `target_auth` are `login` (the default) or `oauthbearer`.
 Both sides are independent: one end can use a password while the other uses
