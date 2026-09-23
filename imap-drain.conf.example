@@ -20,6 +20,13 @@ target_user     = mmchugh@silverapple.eu
 target_passfile = /etc/mbsync/purelymail.pass
 target_mailbox  = INBOX
 
+# --- optional: drain several folders per run ---
+# Comma-separated "source -> target" pairs of arbitrary length, drained in
+# order each run. When absent, the single pair source_mailbox ->
+# target_mailbox above is drained.
+# Use the spelling each server advertises in LIST (Yahoo says "Inbox").
+#mailbox_pairs = Inbox -> INBOX, Spam -> Yahoo-Quarantine
+
 # --- optional ---
 # state_dir    = /var/lib/imap-drain
 # dial_timeout  = 20s

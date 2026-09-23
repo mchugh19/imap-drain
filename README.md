@@ -54,6 +54,18 @@ There are no built-in credentials: the drain refuses to run unless every
 required field is set. `source_mailbox` must match the exact spelling the
 server advertises. Yahoo calls it `Inbox`, not `INBOX`.
 
+To drain several folders per run (any number of pairs, in order), set
+`mailbox_pairs` instead of relying on the single default pair:
+
+```ini
+mailbox_pairs = Inbox -> INBOX, Spam -> Yahoo-Quarantine
+```
+
+Each pair is `source folder -> target folder`, comma-separated. When the key
+is absent, the single pair `source_mailbox -> target_mailbox` is drained, so
+existing configs keep working unchanged. The target folder must already
+exist; the drain never creates folders.
+
 `source_auth` / `target_auth` are `login` (the default) or `oauthbearer`.
 Both sides are independent: one end can use a password while the other uses
 OAuth2, and either side can be Gmail.
@@ -96,8 +108,8 @@ cd src && go vet ./... && go test ./... && go build -o imap-drain .
 
 `INSTALL.sh` installs the binary to `/usr/local/bin` and template systemd units
 (`imap-drain@.service` / `imap-drain@.timer`) that read
-`/etc/imap-drain/<name>.conf` and run every 2 minutes. One timer per
-mailbox pair.
+`/etc/imap-drain/<name>.conf` and run every 2 minutes. One timer per source
+server; each run can drain several folder pairs via `mailbox_pairs`.
 
 Check a config by hand before enabling its timer:
 

@@ -1,6 +1,7 @@
-// Command imap-drain drains one IMAP source mailbox into a target IMAP
-// mailbox, deleting each source message only after it is confirmed on the
-// target.
+// Command imap-drain drains IMAP source folders into target IMAP folders,
+// deleting each source message only after it is confirmed on the
+// target. Each run drains every "source -> target" pair in mailbox_pairs
+// (default: the single source_mailbox -> target_mailbox pair).
 //
 // It is meant to run every couple of minutes from a systemd timer (the
 // imap-drain@.service template takes an instance name; each instance reads
@@ -75,6 +76,10 @@ type Config struct {
 	TargetMailbox   string
 	TargetAuth      string // "login" (default) or "oauthbearer"
 	TargetOAuth     OAuthConfig
+	// MailboxPairs lists the source -> target folder pairs drained each run,
+	// in order. When the mailbox_pairs key is absent it defaults to the
+	// single pair {SourceMailbox, TargetMailbox}.
+	MailboxPairs    [][2]string
 	StateDir        string // lock file location
 	DialTimeout     time.Duration
 	TotalTimeout    time.Duration
@@ -176,6 +181,12 @@ func loadConfig(path string) (*Config, error) {
 			cfg.TargetPassFile = val
 		case "target_mailbox":
 			cfg.TargetMailbox = val
+		case "mailbox_pairs":
+			pairs, err := parseMailboxPairs(val)
+			if err != nil {
+				return nil, err
+			}
+			cfg.MailboxPairs = pairs
 		case "target_auth":
 			cfg.TargetAuth = strings.ToLower(val)
 		case "target_oauth_client_id":
@@ -203,7 +214,36 @@ func loadConfig(path string) (*Config, error) {
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	if len(cfg.MailboxPairs) == 0 {
+		cfg.MailboxPairs = [][2]string{{cfg.SourceMailbox, cfg.TargetMailbox}}
+	}
 	return cfg, nil
+}
+
+// parseMailboxPairs parses a comma-separated list of "source -> target"
+// folder pairs, e.g. "Inbox -> INBOX, Spam -> Yahoo-Quarantine".
+// Arbitrary length: every pair is drained each run, in order.
+func parseMailboxPairs(val string) ([][2]string, error) {
+	var pairs [][2]string
+	for _, part := range strings.Split(val, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		src, dst, ok := strings.Cut(part, "->")
+		if !ok {
+			return nil, fmt.Errorf("bad mailbox pair %q (want \"source -> target\")", part)
+		}
+		src, dst = strings.TrimSpace(src), strings.TrimSpace(dst)
+		if src == "" || dst == "" {
+			return nil, fmt.Errorf("bad mailbox pair %q (want \"source -> target\")", part)
+		}
+		pairs = append(pairs, [2]string{src, dst})
+	}
+	if len(pairs) == 0 {
+		return nil, fmt.Errorf("mailbox_pairs is empty")
+	}
+	return pairs, nil
 }
 
 // validate reports missing required fields.
@@ -439,15 +479,41 @@ func drain(cfg *Config) error {
 	}
 	defer src.Close()
 
-	sel, err := src.client.Select(cfg.SourceMailbox, nil).Wait()
+	// The target connection is opened lazily: if every source folder is
+	// empty the run touches only the source.
+	var dst *imapConn
+	defer func() {
+		if dst != nil {
+			dst.Close()
+		}
+	}()
+
+	var totalDrained, totalDupes, totalFailed int
+	for _, pair := range cfg.MailboxPairs {
+		drained, dupes, failed, err := drainPair(src, &dst, cfg, pair[0], pair[1])
+		if err != nil {
+			return err
+		}
+		totalDrained += drained
+		totalDupes += dupes
+		totalFailed += failed
+	}
+	log.Printf("drain done: %d copied, %d duplicates, %d failed", totalDrained, totalDupes, totalFailed)
+	return nil
+}
+
+// drainPair drains one source folder into one target folder. dstConn is a
+// target connection shared across pairs, dialed on first use.
+func drainPair(src *imapConn, dstConn **imapConn, cfg *Config, srcBox, dstBox string) (drained, dupes, failed int, err error) {
+	sel, err := src.client.Select(srcBox, nil).Wait()
 	if err != nil {
-		return fmt.Errorf("source select %q: %w", cfg.SourceMailbox, err)
+		return 0, 0, 0, fmt.Errorf("source select %q: %w", srcBox, err)
 	}
 	if sel.NumMessages == 0 {
-		log.Printf("source mailbox %q empty, nothing to drain", cfg.SourceMailbox)
-		return nil
+		log.Printf("[%s -> %s] source mailbox empty, nothing to drain", srcBox, dstBox)
+		return 0, 0, 0, nil
 	}
-	log.Printf("%d message(s) in source mailbox %q, draining", sel.NumMessages, cfg.SourceMailbox)
+	log.Printf("[%s -> %s] %d message(s), draining", srcBox, dstBox, sel.NumMessages)
 
 	fetchCmd := src.client.Fetch(
 		imap.SeqSet{{Start: 1, Stop: sel.NumMessages}},
@@ -462,24 +528,26 @@ func drain(cfg *Config) error {
 	)
 	msgs, err := fetchCmd.Collect()
 	if err != nil {
-		return fmt.Errorf("source fetch: %w", err)
+		return 0, 0, 0, fmt.Errorf("source fetch: %w", err)
 	}
 
-	dstCred, err := buildCredentials(cfg.TargetUser, cfg.TargetAuth, cfg.TargetPassFile, &cfg.TargetOAuth)
-	if err != nil {
-		return fmt.Errorf("target credentials: %w", err)
+	if *dstConn == nil {
+		dstCred, err := buildCredentials(cfg.TargetUser, cfg.TargetAuth, cfg.TargetPassFile, &cfg.TargetOAuth)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("target credentials: %w", err)
+		}
+		d, err := dialIMAP(cfg.TargetHost, cfg.TargetPort, dstCred, cfg)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		*dstConn = d
 	}
-	dst, err := dialIMAP(cfg.TargetHost, cfg.TargetPort, dstCred, cfg)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-	if _, err := dst.client.Select(cfg.TargetMailbox, nil).Wait(); err != nil {
-		return fmt.Errorf("target select %q: %w", cfg.TargetMailbox, err)
+	dst := *dstConn
+	if _, err := dst.client.Select(dstBox, nil).Wait(); err != nil {
+		return 0, 0, 0, fmt.Errorf("target select %q: %w", dstBox, err)
 	}
 
 	var toDelete imap.UIDSet
-	drained, dupes, failed := 0, 0, 0
 	for _, m := range msgs {
 		if len(m.BodySection) == 0 {
 			log.Printf("source uid %d: no body fetched, leaving for next tick", m.UID)
@@ -524,7 +592,7 @@ func drain(cfg *Config) error {
 		}
 
 		if deliver {
-			ac := dst.client.Append(cfg.TargetMailbox, int64(len(body)), &imap.AppendOptions{
+			ac := dst.client.Append(dstBox, int64(len(body)), &imap.AppendOptions{
 				Flags: appendFlags(m.Flags),
 				Time:  m.InternalDate,
 			})
@@ -560,15 +628,15 @@ func drain(cfg *Config) error {
 			Flags:  []imap.Flag{imap.FlagDeleted},
 		}, nil)
 		if err := sc.Close(); err != nil {
-			return fmt.Errorf("source flag deleted: %w", err)
+			return 0, 0, 0, fmt.Errorf("source flag deleted: %w", err)
 		}
 		if _, err := src.client.Expunge().Collect(); err != nil {
-			return fmt.Errorf("source expunge: %w", err)
+			return 0, 0, 0, fmt.Errorf("source expunge: %w", err)
 		}
-		log.Printf("deleted %d message(s) from source", len(toDelete))
+		log.Printf("[%s -> %s] deleted %d message(s) from source", srcBox, dstBox, len(toDelete))
 	}
-	log.Printf("drain done: %d copied, %d duplicates, %d failed", drained, dupes, failed)
-	return nil
+	log.Printf("[%s -> %s] done: %d copied, %d duplicates, %d failed", srcBox, dstBox, drained, dupes, failed)
+	return drained, dupes, failed, nil
 }
 
 // lockName derives a per-instance lock name from the config path so

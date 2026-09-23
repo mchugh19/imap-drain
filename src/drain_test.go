@@ -149,3 +149,84 @@ func TestAppendFlags(t *testing.T) {
 		t.Fatalf("appendFlags = %q", out)
 	}
 }
+
+func TestParseMailboxPairs(t *testing.T) {
+	pairs, err := parseMailboxPairs("Inbox -> INBOX, Spam -> Yahoo-Quarantine")
+	if err != nil {
+		t.Fatalf("parseMailboxPairs: %v", err)
+	}
+	want := [][2]string{{"Inbox", "INBOX"}, {"Spam", "Yahoo-Quarantine"}}
+	if len(pairs) != len(want) {
+		t.Fatalf("pairs = %v, want %v", pairs, want)
+	}
+	for i := range want {
+		if pairs[i] != want[i] {
+			t.Fatalf("pairs[%d] = %v, want %v", i, pairs[i], want[i])
+		}
+	}
+}
+
+func TestParseMailboxPairsSingle(t *testing.T) {
+	pairs, err := parseMailboxPairs("Inbox->INBOX")
+	if err != nil {
+		t.Fatalf("parseMailboxPairs: %v", err)
+	}
+	if len(pairs) != 1 || pairs[0] != [2]string{"Inbox", "INBOX"} {
+		t.Fatalf("pairs = %v", pairs)
+	}
+}
+
+func TestParseMailboxPairsBad(t *testing.T) {
+	for _, bad := range []string{
+		"",
+		"   ",
+		"Inbox",          // no arrow
+		"Inbox -> ",      // empty target
+		" -> INBOX",      // empty source
+		"Inbox, Spam -> S", // first entry malformed
+	} {
+		if _, err := parseMailboxPairs(bad); err == nil {
+			t.Fatalf("parseMailboxPairs(%q): expected error, got nil", bad)
+		}
+	}
+}
+
+func TestLoadConfigMailboxPairsDefault(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "yahoo.conf")
+	if err := os.WriteFile(p, []byte(exampleConf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(p)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if len(cfg.MailboxPairs) != 1 || cfg.MailboxPairs[0] != [2]string{"Inbox", "INBOX"} {
+		t.Fatalf("default MailboxPairs = %v", cfg.MailboxPairs)
+	}
+}
+
+func TestLoadConfigMailboxPairs(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "yahoo.conf")
+	conf := exampleConf + "mailbox_pairs = Inbox -> INBOX, Spam -> Yahoo-Quarantine, Bulk -> Old-Bulk\n"
+	if err := os.WriteFile(p, []byte(conf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(p)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	want := [][2]string{{"Inbox", "INBOX"}, {"Spam", "Yahoo-Quarantine"}, {"Bulk", "Old-Bulk"}}
+	if len(cfg.MailboxPairs) != len(want) {
+		t.Fatalf("MailboxPairs = %v, want %v", cfg.MailboxPairs, want)
+	}
+	for i := range want {
+		if cfg.MailboxPairs[i] != want[i] {
+			t.Fatalf("MailboxPairs[%d] = %v, want %v", i, cfg.MailboxPairs[i], want[i])
+		}
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
